@@ -1,0 +1,5 @@
+# macOS
+.DS_Store
+
+# 构建产物（build.sh 生成）
+dist/
