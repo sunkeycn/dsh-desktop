@@ -2,6 +2,7 @@ import { URL } from "node:url";
 import { homedir } from "node:os";
 
 export const name = "file-explorer";
+export const inject = ["fs", "webServer"];
 
 const HOME = homedir();
 
@@ -38,9 +39,9 @@ function allowed(fs, target) {
 }
 
 export function apply(ctx) {
-  const fs = ctx.get("fs");
-  const webServer = ctx.get("webServer");
-  if (fs === undefined || webServer === undefined) return;
+  const fs = ctx.fs;
+  const webServer = ctx.webServer;
+  console.log(`[file-explorer] apply: fs=${!!fs} webServer=${!!webServer}`);
 
   async function listDir(req, res) {
     const path = queryPath(req);
@@ -125,6 +126,7 @@ export function apply(ctx) {
     const d1 = webServer.register({ kind: "exact", path: "/file-explorer/listDir", handler: listDir });
     const d2 = webServer.register({ kind: "exact", path: "/file-explorer/readFile", handler: readFile });
     const d3 = webServer.register({ kind: "exact", path: "/file-explorer/statPath", handler: statPath });
+    console.log("[file-explorer] routes registered");
     return () => { d1(); d2(); d3(); };
   });
 }

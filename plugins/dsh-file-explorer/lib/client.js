@@ -32,7 +32,6 @@ window.__ModuleLoader__.load({
       if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
       return (n / 1048576).toFixed(1) + " MB";
     }
-
     function sortEntries(entries) {
       const arr = Array.isArray(entries) ? entries.slice() : [];
       const dirs = arr.filter((e) => e.type === "directory");
@@ -41,7 +40,6 @@ window.__ModuleLoader__.load({
       dirs.sort(cmp); files.sort(cmp);
       return dirs.concat(files);
     }
-
     function parentOf(path) {
       const s = String(path).replace(/\/+$/, "");
       if (s === "" || s === "/") return null;
@@ -49,19 +47,16 @@ window.__ModuleLoader__.load({
       if (i <= 0) return "/";
       return s.slice(0, i);
     }
-
     function basename(path) {
       const s = String(path).replace(/\/+$/, "");
       const i = s.lastIndexOf("/");
       return i < 0 ? s : s.slice(i + 1);
     }
-
     function api(method, params) {
       const qs = Object.keys(params || {}).map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(String(params[k]))).join("&");
       return fetch("/file-explorer/" + method + (qs ? "?" + qs : "")).then((r) => r.json());
     }
 
-    // ---- syntax highlighter ----
     const KW = {
       js: "const let var function return if else for while do switch case break continue new this class extends super import export from default async await try catch finally throw typeof instanceof in of delete void yield static get set null undefined true false".split(" "),
       ts: "const let var function return if else for while do switch case break continue new this class extends super import export from default async await try catch finally throw typeof instanceof in of delete void yield static get set null undefined true false type interface enum implements namespace declare readonly abstract as satisfies keyof infer is never unknown any string number boolean object symbol bigint".split(" "),
@@ -198,7 +193,7 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const slots = ctx.slots;
       const workspaces = ctx.get("workspaces");
-      const layout = ctx.get("layout");
+      const layout = ctx.layout;
 
       ctx.effect(() => {
         if (typeof document === "undefined") return undefined;
@@ -214,10 +209,9 @@ window.__ModuleLoader__.load({
       function notify() { listeners.forEach((l) => { try { l(); } catch (e) {} }); }
       function openColumn() { if (layout && typeof layout.openDetails === "function") layout.openDetails(); }
       function closeColumn() { if (layout && typeof layout.closeDetails === "function") layout.closeDetails(); }
+
       const store = {
         toggle() { if (state.open) { state.open = false; closeColumn(); } else { state.open = true; openColumn(); } notify(); },
-        open() { state.open = true; openColumn(); notify(); },
-        close() { state.open = false; closeColumn(); notify(); },
         preview(path) { state.open = true; state.previewPath = path; openColumn(); notify(); },
         subscribe(l) { listeners.add(l); return () => { listeners.delete(l); }; },
       };
@@ -481,11 +475,13 @@ window.__ModuleLoader__.load({
       }
 
       function ToggleButton() {
+        const snap = useStore();
+        const label = snap.open ? "关闭" : "文件浏览";
         return React.createElement("button", {
           type: "button",
           className: "dshfx-iconbtn",
-          title: "文件浏览",
-          "aria-label": "文件浏览",
+          title: label,
+          "aria-label": label,
           onClick: store.toggle,
         },
           React.createElement("svg", { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg" },
@@ -495,7 +491,7 @@ window.__ModuleLoader__.load({
         );
       }
 
-      slots.inject("details", () => slots.register({ name: "details" }, Panel));
+      slots.inject("details", () => slots.register({ name: "details", priority: -1 }, Panel));
       slots.inject("conversation.session.header.utilities", () => slots.register(
         { name: "conversation.session.header.utilities", id: "file-explorer-toggle", order: 1000, label: () => "文件" },
         ToggleButton
@@ -503,7 +499,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply;
-    exports.inject = ["slots"];
+    exports.inject = ["slots", "layout"];
     return module.exports;
   }
 });
