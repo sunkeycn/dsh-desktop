@@ -3,7 +3,7 @@ import WebKit
 
 let kURL = "http://127.0.0.1:3080"
 let kNodeVersion = "25.7.0"
-let kRegistryLatest = "https://registry.npmjs.org/@deepseek-ai%2fdsh/latest"
+let kRegistryPackage = "https://registry.npmjs.org/@deepseek-ai%2fdsh"
 
 func isInternal(_ url: URL) -> Bool {
     guard let host = url.host?.lowercased() else { return false }
@@ -40,7 +40,7 @@ func isNewer(_ a: String, than b: String) -> Bool {
     return va.3 > vb.3
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, URLSessionDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, URLSessionDownloadDelegate, PluginManagerControllerDelegate {
     var window: NSWindow!
     var webView: WKWebView!
 
@@ -54,6 +54,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     // Bootstrap status line (update check / upgrade)
     var bootstrapStatusLabel: NSTextField?
+
+    // About panel state
+    var aboutPanel: NSPanel?
+    var aboutHarnessLabel: NSTextField?
+
+    // Update state
+    var upgradeInProgress = false
+    var checkUpdateItem: NSMenuItem?
+
+    // Bundled plugin lifecycle
+    var pluginService: PluginService!
+    var pluginManagerController: PluginManagerController?
+    var bundledPluginsProvisioned = false
+    var bootstrapInProgress = false
+    var serverLaunchInProgress = false
 
     // MARK: - Runtime paths
 
@@ -74,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // MARK: - App lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        pluginService = PluginService(runtimeRoot: runtimeRoot())
         buildMenu()
 
         let config = WKWebViewConfiguration()
@@ -348,10 +364,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     private func showBootstrap() {
         window.contentView = makePlaceholder(text: "正在启动 DeepSeek Harness…", showSpinner: true)
-        bootstrap()
+        guard !bundledPluginsProvisioned else {
+            bootstrap()
+            return
+        }
+        setBootstrapStatus("正在准备内置插件…")
+        pluginService.provisionBundledPlugins { [weak self] ok, changed in
+            guard let self else { return }
+            self.bundledPluginsProvisioned = true
+            if !ok { self.setBootstrapStatus("部分内置插件安装失败，可稍后在插件管理中重试") }
+            guard changed else {
+                self.bootstrap()
+                return
+            }
+            self.setBootstrapStatus("内置插件已更新，正在重启 Harness…")
+            self.stopServer()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.bootstrap()
+            }
+        }
     }
 
     private func bootstrap() {
+        guard !bootstrapInProgress else {
+            NSLog("DeepSeekHarness: ignored duplicate bootstrap request")
+            return
+        }
+        bootstrapInProgress = true
         serverIsUp { [weak self] up in
             guard let self = self else { return }
             if up {
@@ -378,22 +417,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func startServer() {
+        guard !serverLaunchInProgress else {
+            NSLog("DeepSeekHarness: ignored duplicate server start request")
+            return
+        }
+        serverLaunchInProgress = true
+        serverIsUp { [weak self] up in
+            guard let self else { return }
+            if up {
+                self.serverLaunchInProgress = false
+                NSLog("DeepSeekHarness: skipped server start because port 3080 is already available")
+                return
+            }
+            self.launchServerProcess()
+        }
+    }
+
+    private func launchServerProcess() {
         let nodeDir = runtimeRoot().appendingPathComponent("node/bin").path
         let nodeBin = nodeBinURL().path
         let binJs = dshBinJSURL().path
-        let cmd = "mkdir -p \"$HOME/.dsh\"; export PATH=\(sq(nodeDir)):/usr/bin:/bin:/usr/sbin:/sbin; cd \"$HOME\"; nohup \(sq(nodeBin)) \(sq(binJs)) web >> \"$HOME/.dsh/launcher.log\" 2>&1 &"
+        let trustedHostArgument = frpTrustedAuthority().map { " --trusted-host \(sq($0))" } ?? ""
+        let cmd = "mkdir -p \"$HOME/.dsh\"; export PATH=\(sq(nodeDir)):/usr/bin:/bin:/usr/sbin:/sbin; cd \"$HOME\"; nohup \(sq(nodeBin)) \(sq(binJs)) web --no-open\(trustedHostArgument) >> \"$HOME/.dsh/launcher.log\" 2>&1 &"
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
         p.arguments = ["-c", cmd]
         do {
             try p.run()
         } catch {
+            serverLaunchInProgress = false
             NSLog("DeepSeekHarness: failed to start server: %@", error.localizedDescription)
         }
     }
 
+    private func frpTrustedAuthority() -> String? {
+        let config = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dsh/frp/config.json")
+        guard let data = try? Data(contentsOf: config),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let publicURL = object["publicUrl"] as? String,
+              let components = URLComponents(string: publicURL),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty else { return nil }
+        if let port = components.port { return "\(host):\(port)" }
+        return host
+    }
+
     private func pollUntilUp(deadline: Date) {
         guard Date() < deadline else {
+            bootstrapInProgress = false
+            serverLaunchInProgress = false
             window.contentView = makePlaceholder(text: "启动失败，请查看 ~/.dsh/launcher.log", showSpinner: false)
             return
         }
@@ -411,6 +483,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     private func loadApp() {
         guard let url = URL(string: kURL) else { return }
+        bootstrapInProgress = false
+        serverLaunchInProgress = false
         window.contentView = webView
         webView.load(URLRequest(url: url))
     }
@@ -426,7 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func fetchLatestVersion(_ completion: @escaping (String?) -> Void) {
-        guard let url = URL(string: kRegistryLatest) else {
+        guard let url = URL(string: kRegistryPackage) else {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -437,7 +511,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             var v: String? = nil
             if let data = data,
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let ver = obj["version"] as? String { v = ver }
+               let tags = obj["dist-tags"] as? [String: String] {
+                // The package ships release candidates on both `latest` and `next`;
+                // use whichever tag currently points to the newer version.
+                let latest = tags["latest"]
+                let next = tags["next"]
+                if let latest = latest { v = latest }
+                if let next = next, next != v, v == nil || isNewer(next, than: v!) {
+                    v = next
+                }
+            }
             DispatchQueue.main.async { completion(v) }
         }
         task.resume()
@@ -474,6 +557,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                      completion: { ok in
                         DispatchQueue.main.async { completion(ok) }
                      })
+    }
+    @objc func checkForUpgradeFromMenu(_ sender: Any?) {
+        guard !upgradeInProgress else { return }
+
+        guard runtimeIsInstalled(), let current = installedVersion() else {
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "尚未安装 Harness"
+            alert.informativeText = "完成首次安装后即可检查升级。"
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+            return
+        }
+
+        checkUpdateItem?.isEnabled = false
+        checkUpdateItem?.title = "正在检查更新…"
+        fetchLatestVersion { [weak self] latest in
+            guard let self = self else { return }
+            self.checkUpdateItem?.isEnabled = true
+            self.checkUpdateItem?.title = "检查升级…"
+
+            guard let latest = latest else {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "检查升级失败"
+                alert.informativeText = "无法连接 npm registry，请检查网络后重试。"
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+                return
+            }
+
+            if isNewer(latest, than: current) {
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                alert.messageText = "发现新版本"
+                alert.informativeText = "当前 Harness 版本：\(current)\n最新 Harness 版本：\(latest)\n\n是否立即升级？"
+                alert.addButton(withTitle: "立即升级")
+                alert.addButton(withTitle: "取消")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    self.performMenuUpgrade(to: latest)
+                }
+            } else {
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                alert.messageText = "已是最新版本"
+                alert.informativeText = "当前 Harness 版本：\(current)\n最新 Harness 版本：\(latest)"
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+            }
+        }
+    }
+
+    private func performMenuUpgrade(to version: String) {
+        guard !upgradeInProgress else { return }
+        upgradeInProgress = true
+        checkUpdateItem?.isEnabled = false
+        checkUpdateItem?.title = "正在升级…"
+
+        window.contentView = makePlaceholder(text: "正在升级 DeepSeek Harness…", showSpinner: true)
+        setBootstrapStatus("正在升级到 \(version)…")
+
+        upgrade(to: version) { [weak self] ok in
+            guard let self = self else { return }
+            if !ok {
+                self.upgradeInProgress = false
+                self.checkUpdateItem?.isEnabled = true
+                self.checkUpdateItem?.title = "检查升级…"
+                self.window.contentView = self.makePlaceholder(text: "升级失败", showSpinner: false)
+                self.setBootstrapStatus("请查看 ~/.dsh/launcher.log 后重试")
+                return
+            }
+
+            self.setBootstrapStatus("升级完成，正在重启服务…")
+            self.aboutHarnessLabel?.stringValue = "Harness 版本：\(version)"
+            self.stopServer()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self = self else { return }
+                self.upgradeInProgress = false
+                self.checkUpdateItem?.isEnabled = true
+                self.checkUpdateItem?.title = "检查升级…"
+                self.startServer()
+                self.pollUntilUp(deadline: Date().addingTimeInterval(90))
+            }
+        }
+    }
+
+    private func stopServer() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["-c", "/usr/sbin/lsof -ti tcp:3080 | xargs kill 2>/dev/null || true"]
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            NSLog("DeepSeekHarness: failed to stop server: %@", error.localizedDescription)
+        }
     }
 
     private func setBootstrapStatus(_ s: String) {
@@ -524,6 +704,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return v
     }
 
+    private func launcherVersion() -> String {
+        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !v.isEmpty { return v }
+        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !v.isEmpty { return v }
+        return "1.0.0"
+    }
+
+    // MARK: - About panel
+
+    @objc func showAboutPanel(_ sender: Any?) {
+        if let panel = aboutPanel {
+            panel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 250),
+                            styleMask: [.titled, .closable],
+                            backing: .buffered,
+                            defer: false)
+        panel.title = "关于 DeepSeek Harness"
+        panel.isReleasedWhenClosed = false
+        panel.center()
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 250))
+
+        let iconView = NSImageView(frame: NSRect(x: 178, y: 158, width: 64, height: 64))
+        iconView.image = NSApp.applicationIconImage
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        content.addSubview(iconView)
+
+        let titleLabel = NSTextField(frame: NSRect(x: 20, y: 122, width: 380, height: 26))
+        titleLabel.stringValue = "DeepSeek Harness"
+        titleLabel.font = NSFont.systemFont(ofSize: 17, weight: .bold)
+        titleLabel.alignment = .center
+        titleLabel.isEditable = false
+        titleLabel.isBordered = false
+        titleLabel.drawsBackground = false
+        content.addSubview(titleLabel)
+
+        let versionLabel = NSTextField(frame: NSRect(x: 20, y: 92, width: 380, height: 22))
+        versionLabel.stringValue = "版本：\(launcherVersion())"
+        versionLabel.font = NSFont.systemFont(ofSize: 13)
+        versionLabel.textColor = .secondaryLabelColor
+        versionLabel.alignment = .center
+        versionLabel.isEditable = false
+        versionLabel.isBordered = false
+        versionLabel.drawsBackground = false
+        content.addSubview(versionLabel)
+
+        let harnessLabel = NSTextField(frame: NSRect(x: 20, y: 66, width: 380, height: 22))
+        harnessLabel.stringValue = "Harness 版本：获取中…"
+        harnessLabel.font = NSFont.systemFont(ofSize: 13)
+        harnessLabel.textColor = .secondaryLabelColor
+        harnessLabel.alignment = .center
+        harnessLabel.isEditable = false
+        harnessLabel.isBordered = false
+        harnessLabel.drawsBackground = false
+        content.addSubview(harnessLabel)
+
+        let button = NSButton(frame: NSRect(x: 170, y: 18, width: 80, height: 28))
+        button.title = "好"
+        button.target = self
+        button.action = #selector(closeAboutPanel(_:))
+        button.bezelStyle = .rounded
+        content.addSubview(button)
+
+        panel.contentView = content
+        aboutPanel = panel
+        aboutHarnessLabel = harnessLabel
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        refreshAboutHarnessVersion()
+    }
+
+    @objc func closeAboutPanel(_ sender: Any?) {
+        aboutPanel?.close()
+    }
+
+    private func refreshAboutHarnessVersion() {
+        if let installed = installedVersion() {
+            aboutHarnessLabel?.stringValue = "Harness 版本：\(installed)"
+        } else {
+            aboutHarnessLabel?.stringValue = "Harness 版本：获取中…"
+            fetchLatestVersion { [weak self] latest in
+                guard let self = self else { return }
+                self.aboutHarnessLabel?.stringValue = latest.map { "Harness 版本：\($0)" } ?? "Harness 版本：未安装"
+            }
+        }
+    }
+
     // MARK: - Menu
 
     private func buildMenu() {
@@ -533,7 +806,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
-        appMenu.addItem(withTitle: "关于 DeepSeek Harness", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+
+        let aboutItem = NSMenuItem(title: "关于 DeepSeek Harness", action: #selector(showAboutPanel(_:)), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+
+        let checkUpdateItem = NSMenuItem(title: "检查升级…", action: #selector(checkForUpgradeFromMenu(_:)), keyEquivalent: "")
+        checkUpdateItem.target = self
+        self.checkUpdateItem = checkUpdateItem
+        appMenu.addItem(checkUpdateItem)
+
+        let pluginManagerItem = NSMenuItem(title: "插件管理…", action: #selector(showPluginManager(_:)), keyEquivalent: "")
+        pluginManagerItem.target = self
+        appMenu.addItem(pluginManagerItem)
+
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "退出 DeepSeek Harness", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
@@ -553,9 +839,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "显示")
         viewItem.submenu = viewMenu
-        viewMenu.addItem(withTitle: "重新加载", action: #selector(reload(_:)), keyEquivalent: "r")
+        let reloadItem = NSMenuItem(title: "重新加载", action: #selector(reload(_:)), keyEquivalent: "r")
+        reloadItem.target = self
+        viewMenu.addItem(reloadItem)
         viewMenu.addItem(NSMenuItem.separator())
-        viewMenu.addItem(withTitle: "在浏览器中打开", action: #selector(openInBrowser(_:)), keyEquivalent: "")
+
+        let openInBrowserItem = NSMenuItem(title: "在浏览器中打开", action: #selector(openInBrowser(_:)), keyEquivalent: "")
+        openInBrowserItem.target = self
+        viewMenu.addItem(openInBrowserItem)
 
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
@@ -575,6 +866,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc func openInBrowser(_ sender: Any?) {
         if let url = URL(string: kURL) {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc func showPluginManager(_ sender: Any?) {
+        if pluginManagerController == nil {
+            let controller = PluginManagerController(service: pluginService)
+            controller.delegate = self
+            pluginManagerController = controller
+        }
+        pluginManagerController?.showWindow(nil)
+        pluginManagerController?.window?.center()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func pluginManagerRequestedHarnessRestart(_ controller: PluginManagerController) {
+        controller.close()
+        window.contentView = makePlaceholder(text: "正在重新启动 DeepSeek Harness…", showSpinner: true)
+        setBootstrapStatus("正在应用插件和远程访问配置…")
+        stopServer()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            self.startServer()
+            self.pollUntilUp(deadline: Date().addingTimeInterval(90))
         }
     }
 

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "dsh-pet",
+    "displayName": "dsh-pet",
+    "summary": "桌面宠物",
+    "publisher": "PC2005-cloud",
+    "bundledVersion": "0.1.8",
+    "seed": "dsh-pet-0.1.8.tgz",
+    "registryPackage": "dsh-pet",
+    "dataPaths": []
+  },
+  {
+    "id": "dsh-better-sidebar",
+    "displayName": "dsh-better-sidebar",
+    "summary": "代码工作台",
+    "publisher": "omdsh-dev",
+    "bundledVersion": "0.15.2",
+    "seed": "dsh-better-sidebar-0.15.2.tgz",
+    "registryPackage": "dsh-better-sidebar",
+    "dataPaths": []
+  },
+  {
+    "id": "dsh-frp-remote",
+    "displayName": "dsh-frp-remote",
+    "summary": "远程访问",
+    "publisher": "随 App 提供",
+    "bundledVersion": "0.2.0",
+    "seed": "dsh-frp-remote-0.2.0.tgz",
+    "registryPackage": null,
+    "dataPaths": ["~/.dsh/frp"]
+  }
+]

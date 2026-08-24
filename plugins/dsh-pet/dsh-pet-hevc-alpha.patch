@@ -1,0 +1,68 @@
+diff --git a/src/client/pet.ts b/src/client/pet.ts
+--- a/src/client/pet.ts
++++ b/src/client/pet.ts
+@@ -19,6 +19,11 @@ let config: ClientConfig = EMPTY_CONF;
+ /** 余额气泡展示时长（ms）：定时自动消失，与动画生命周期解耦 */
+ const BUBBLE_DURATION_MS = 10 * 1000;
+ 
++/** WKWebView uses HEVC-with-alpha; Chromium keeps the original VP9-alpha WebM. */
++const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
++const isAppleWebKit = /AppleWebKit/i.test(userAgent) && !/(Chrome|Chromium|Edg|OPR)/i.test(userAgent);
++const petExt = isAppleWebKit ? '.mov' : '.webm';
++
+ /** 内联 CSS —— 注入一次（官方插件标准做法） */
+ const css = [
+   '.dsh-pet-root{position:fixed;z-index:40;pointer-events:none;user-select:none}',
+@@ -112,7 +117,7 @@ export function makePetUI(rt: {
+       const target = frontRef.current === 0 ? videoBRef : videoARef;
+       const el = target.current;
+       if (!el) return;
+-      el.src = '/dsh-pet-7340/thumb/' + encodeURIComponent(next) + '.webm';
++      el.src = '/dsh-pet-7340/thumb/' + encodeURIComponent(next) + petExt;
+       el.loop = !nextOnce;
+       el.muted = true;
+       el.autoplay = true;
+diff --git a/src/host/index.ts b/src/host/index.ts
+--- a/src/host/index.ts
++++ b/src/host/index.ts
+@@ -39,6 +39,7 @@ const ROUTE_PREFIX = '/dsh-pet-7340';
+ /** 不同扩展名对应的 Content-Type 映射 */
+ const MIME: Record<string, string> = {
+   '.webm': 'video/webm',
++  '.mov': 'video/quicktime',
+   '.mp4': 'video/mp4',
+   '.png': 'image/png',
+   '.json': 'application/json; charset=utf-8',
+diff --git a/lib/client.js b/lib/client.js
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -1443,6 +1443,9 @@ function injectCss() {
+ 		document.head.appendChild(tag);
+ 	}
+ }
++const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
++const isAppleWebKit = /AppleWebKit/i.test(userAgent) && !/(Chrome|Chromium|Edg|OPR)/i.test(userAgent);
++const petExt = isAppleWebKit ? ".mov" : ".webm";
+ function makePetUI(rt) {
+ 	const { h, useState, useEffect, useRef } = rt;
+ 	injectCss();
+@@ -1510,7 +1513,7 @@ function makePetUI(rt) {
+ 			const target = frontRef.current === 0 ? videoBRef : videoARef;
+ 			const el = target.current;
+ 			if (!el) return;
+-			el.src = "/dsh-pet-7340/thumb/" + encodeURIComponent(next) + ".webm";
++			el.src = "/dsh-pet-7340/thumb/" + encodeURIComponent(next) + petExt;
+ 			el.loop = !nextOnce;
+ 			el.muted = true;
+ 			el.autoplay = true;
+diff --git a/lib/index.js b/lib/index.js
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -149,6 +149,7 @@ const ROUTE_PREFIX = "/dsh-pet-7340";
+ /** 不同扩展名对应的 Content-Type 映射 */
+ const MIME = {
+ 	".webm": "video/webm",
++	".mov": "video/quicktime",
+ 	".mp4": "video/mp4",
+ 	".png": "image/png",
+ 	".json": "application/json; charset=utf-8",
