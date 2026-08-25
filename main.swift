@@ -102,7 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         (function () {
           var s = document.createElement('style');
           s.id = 'dsh-no-bounce';
-          s.textContent = 'html,body{overscroll-behavior:none !important}*{overscroll-behavior:none !important}';
+          s.textContent = `
+            html,body{overscroll-behavior:none !important}
+            *{overscroll-behavior:none !important}
+            [class*="_logoRow"] > [class*="_brand"]{position:relative !important;top:6px !important}
+          `;
           (document.head || document.documentElement).appendChild(s);
         })();
         """
