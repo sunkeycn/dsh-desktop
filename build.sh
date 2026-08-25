@@ -106,8 +106,14 @@ if [ "$ACTUAL_FRP_SHA256" != "$FRP_SHA256" ]; then
 fi
 mkdir -p "$FRP_EXTRACT" "$APP/Contents/Resources/FRP"
 tar -xzf "$FRP_ARCHIVE" -C "$FRP_EXTRACT"
-cp "$FRP_EXTRACT/frp_${FRP_VERSION}_darwin_${FRP_ARCH}/frpc" "$APP/Contents/Resources/FRP/frpc"
+FRP_PACKAGE_DIR="$FRP_EXTRACT/frp_${FRP_VERSION}_darwin_${FRP_ARCH}"
+cp "$FRP_PACKAGE_DIR/frpc" "$APP/Contents/Resources/FRP/frpc"
 chmod 755 "$APP/Contents/Resources/FRP/frpc"
+mkdir -p "$APP/Contents/Resources/Licenses"
+cp "$FRP_PACKAGE_DIR/LICENSE" "$APP/Contents/Resources/Licenses/frp-Apache-2.0.txt"
+if [ -f "$FRP_PACKAGE_DIR/NOTICE" ]; then
+  cp "$FRP_PACKAGE_DIR/NOTICE" "$APP/Contents/Resources/Licenses/frp-NOTICE.txt"
+fi
 
 echo "==> Signing"
 codesign --force --deep --sign - "$APP"

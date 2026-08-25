@@ -2,6 +2,7 @@
   "name": "dsh-frp-remote",
   "version": "0.2.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
